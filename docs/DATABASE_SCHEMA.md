@@ -1,0 +1,579 @@
+# Database Schema & Data Models (DATABASE_SCHEMA)
+
+## Smart Recruitment & Applicant Tracking System (ATS)
+
+**Document Version:** 1.0.0  
+**Status:** Approved for Implementation (Phase 1 Final)  
+**Author:** Senior Full-Stack Software Architect  
+**Database Engine:** PostgreSQL 15+  
+**ORM:** Prisma ORM  
+
+---
+
+## 1. Entity-Relationship Overview
+
+```mermaid
+erDiagram
+    User ||--o{ UserRole : has
+    Role ||--o{ UserRole : assigned_to
+    User ||--o| Profile : owns
+    User ||--o{ RefreshToken : issues
+    User ||--o{ Job : creates
+    User ||--o{ Application : submits_as_candidate
+    User ||--o{ ApplicationStageHistory : changes_stage
+    User ||--o{ InterviewParticipant : conducts_as_interviewer
+    User ||--o{ InterviewScorecard : submits_scorecard
+    User ||--o{ JobOffer : approved_by
+    User ||--o{ AuditLog : performs
+
+    Department ||--o{ Job : categorizes
+    Job ||--o{ JobSkill : requires
+    Skill ||--o{ JobSkill : mapped_in
+    Job ||--o{ Application : receives
+
+    Application ||--o| Resume : contains
+    Application ||--o{ ApplicationStageHistory : tracks
+    Application ||--o{ CandidateNote : annotated_with
+    Application ||--o{ Interview : scheduled_for
+    Application ||--o| JobOffer : extended_with
+    Application ||--o| OnboardingWorkflow : triggers
+
+    Interview ||--o{ InterviewParticipant : involves
+    Interview ||--o{ InterviewScorecard : evaluated_by
+
+    OnboardingWorkflow ||--o{ OnboardingTask : consists_of
+    OnboardingTask ||--o{ OnboardingTaskSubmission : receives_proof
+```
+
+---
+
+## 2. Declarative Prisma Schema Specification (`schema.prisma`)
+
+```prisma
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// ==========================================
+// ENUMS
+// ==========================================
+
+enum RoleType {
+  SUPER_ADMIN
+  HR_MANAGER
+  RECRUITER
+  HIRING_MANAGER
+  INTERVIEWER
+  CANDIDATE
+}
+
+enum JobStatus {
+  DRAFT
+  PENDING_APPROVAL
+  PUBLISHED
+  ON_HOLD
+  CLOSED
+  ARCHIVED
+}
+
+enum EmploymentType {
+  FULL_TIME
+  PART_TIME
+  CONTRACT
+  INTERNSHIP
+  REMOTE
+}
+
+enum ExperienceLevel {
+  ENTRY_LEVEL
+  MID_LEVEL
+  SENIOR_LEVEL
+  LEAD
+  EXECUTIVE
+}
+
+enum ApplicationStage {
+  APPLIED
+  SCREENING
+  INTERVIEW_SCHEDULED
+  INTERVIEW_COMPLETED
+  OFFERED
+  ACCEPTED
+  REJECTED
+  ONBOARDING
+  HIRED
+  WITHDRAWN
+}
+
+enum InterviewType {
+  SCREENING
+  TECHNICAL
+  CULTURAL
+  EXECUTIVE
+}
+
+enum InterviewStatus {
+  SCHEDULED
+  COMPLETED
+  CANCELLED
+  RESCHEDULED
+}
+
+enum ScorecardRecommendation {
+  STRONG_HIRE
+  HIRE
+  NO_HIRE
+  STRONG_NO_HIRE
+}
+
+enum OfferStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  SENT
+  ACCEPTED
+  DECLINED
+  EXPIRED
+  REVOKED
+}
+
+enum OnboardingTaskStatus {
+  PENDING
+  SUBMITTED
+  VERIFIED
+  REJECTED
+}
+
+// ==========================================
+// AUTHENTICATION & USER MANAGEMENT
+// ==========================================
+
+model User {
+  id                    String                 @id @default(uuid())
+  email                 String                 @unique
+  passwordHash          String
+  firstName             String
+  lastName              String
+  phoneNumber           String?
+  isActive              Boolean                @default(true)
+  isEmailVerified       Boolean                @default(false)
+  failedLoginAttempts   Int                    @default(0)
+  lockedUntil           DateTime?
+  lastLoginAt           DateTime?
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
+  deletedAt             DateTime?
+
+  // Relations
+  roles                 UserRole[]
+  profile               Profile?
+  refreshTokens         RefreshToken[]
+  createdJobs           Job[]                  @relation("JobCreator")
+  applications          Application[]          @relation("CandidateApplications")
+  stageChanges          ApplicationStageHistory[] @relation("StageChangedBy")
+  candidateNotes        CandidateNote[]        @relation("NoteAuthor")
+  interviewAssignments InterviewParticipant[] @relation("InterviewerUser")
+  scorecards            InterviewScorecard[]   @relation("ScorecardAuthor")
+  approvedOffers        JobOffer[]             @relation("OfferApprover")
+  auditLogs             AuditLog[]
+
+  @@index([email])
+  @@index([deletedAt])
+}
+
+model Role {
+  id          String     @id @default(uuid())
+  name        RoleType   @unique
+  description String?
+  createdAt   DateTime   @default(now())
+
+  users       UserRole[]
+}
+
+model UserRole {
+  id        String   @id @default(uuid())
+  userId    String
+  roleId    String
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, roleId])
+  @@index([userId])
+  @@index([roleId])
+}
+
+model Profile {
+  id             String    @id @default(uuid())
+  userId         String    @unique
+  headline       String?
+  bio            String?
+  linkedinUrl    String?
+  githubUrl      String?
+  portfolioUrl   String?
+  yearsOfExp     Decimal?  @db.Decimal(4, 1)
+  currentCompany String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model RefreshToken {
+  id          String    @id @default(uuid())
+  userId      String
+  tokenHash   String    @unique
+  deviceInfo  String?
+  ipAddress   String?
+  isRevoked   Boolean   @default(false)
+  expiresAt   DateTime
+  createdAt   DateTime  @default(now())
+
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([tokenHash])
+}
+
+// ==========================================
+// JOB REQUISITIONS & DEPARTMENTS
+// ==========================================
+
+model Department {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  code        String   @unique
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  jobs        Job[]
+}
+
+model Job {
+  id              String          @id @default(uuid())
+  title           String
+  code            String          @unique
+  departmentId    String
+  creatorId       String
+  status          JobStatus       @default(DRAFT)
+  employmentType  EmploymentType  @default(FULL_TIME)
+  experienceLevel ExperienceLevel @default(MID_LEVEL)
+  location        String          // e.g., "Remote", "New York, NY", "Hybrid"
+  minSalary       Decimal?        @db.Decimal(12, 2)
+  maxSalary       Decimal?        @db.Decimal(12, 2)
+  currency        String          @default("USD")
+  description     String          @db.Text
+  requirements    String          @db.Text
+  benefits        String?         @db.Text
+  deadline        DateTime?
+  publishedAt     DateTime?
+  closedAt        DateTime?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  deletedAt       DateTime?
+
+  department      Department      @relation(fields: [departmentId], references: [id], onDelete: Restrict)
+  creator         User            @relation("JobCreator", fields: [creatorId], references: [id], onDelete: Restrict)
+  skills          JobSkill[]
+  applications    Application[]
+
+  @@index([status])
+  @@index([departmentId])
+  @@index([creatorId])
+  @@index([deadline])
+}
+
+model Skill {
+  id        String     @id @default(uuid())
+  name      String     @unique
+  createdAt DateTime   @default(now())
+
+  jobs      JobSkill[]
+}
+
+model JobSkill {
+  id         String   @id @default(uuid())
+  jobId      String
+  skillId    String
+  isMandatory Boolean  @default(true)
+
+  job        Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  skill      Skill    @relation(fields: [skillId], references: [id], onDelete: Cascade)
+
+  @@unique([jobId, skillId])
+  @@index([jobId])
+  @@index([skillId])
+}
+
+// ==========================================
+// APPLICATIONS, RESUMES & SCREENING
+// ==========================================
+
+model Application {
+  id               String                 @id @default(uuid())
+  candidateId      String
+  jobId            String
+  stage            ApplicationStage       @default(APPLIED)
+  withdrawalReason String?
+  source           String                 @default("CAREER_PORTAL")
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
+  deletedAt        DateTime?
+
+  candidate        User                   @relation("CandidateApplications", fields: [candidateId], references: [id], onDelete: Restrict)
+  job              Job                    @relation(fields: [jobId], references: [id], onDelete: Restrict)
+  resume           Resume?
+  stageHistory     ApplicationStageHistory[]
+  notes            CandidateNote[]
+  interviews       Interview[]
+  offer            JobOffer?
+  onboarding       OnboardingWorkflow?
+
+  @@unique([candidateId, jobId])
+  @@index([candidateId])
+  @@index([jobId])
+  @@index([stage])
+  @@index([createdAt])
+}
+
+model Resume {
+  id             String      @id @default(uuid())
+  applicationId  String      @unique
+  originalName   String
+  storedFileName String      @unique
+  storagePath    String
+  mimeType       String
+  fileSizeBytes  Int
+  fileHash       String      // SHA-256 for duplicate and integrity checks
+  uploadedAt     DateTime    @default(now())
+
+  application    Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  @@index([applicationId])
+}
+
+model ApplicationStageHistory {
+  id            String           @id @default(uuid())
+  applicationId String
+  fromStage     ApplicationStage
+  toStage       ApplicationStage
+  changedById   String
+  reason        String?
+  createdAt     DateTime         @default(now())
+
+  application   Application      @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  changedBy     User             @relation("StageChangedBy", fields: [changedById], references: [id], onDelete: Restrict)
+
+  @@index([applicationId])
+  @@index([createdAt])
+}
+
+model CandidateNote {
+  id            String      @id @default(uuid())
+  applicationId String
+  authorId      String
+  content       String      @db.Text
+  isPrivate     Boolean     @default(false)
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  application   Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  author        User        @relation("NoteAuthor", fields: [authorId], references: [id], onDelete: Restrict)
+
+  @@index([applicationId])
+}
+
+// ==========================================
+// INTERVIEWS & EVALUATIONS
+// ==========================================
+
+model Interview {
+  id            String                 @id @default(uuid())
+  applicationId String
+  roundName     String                 // e.g. "Screening", "System Design", "Culture"
+  type          InterviewType          @default(TECHNICAL)
+  status        InterviewStatus        @default(SCHEDULED)
+  scheduledAt   DateTime
+  durationMins  Int                    @default(45)
+  meetingUrl    String?
+  notes         String?                @db.Text
+  createdAt     DateTime               @default(now())
+  updatedAt     DateTime               @updatedAt
+
+  application   Application            @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  participants  InterviewParticipant[]
+  scorecards    InterviewScorecard[]
+
+  @@index([applicationId])
+  @@index([scheduledAt])
+  @@index([status])
+}
+
+model InterviewParticipant {
+  id            String      @id @default(uuid())
+  interviewId   String
+  interviewerId String
+  createdAt     DateTime    @default(now())
+
+  interview     Interview   @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+  interviewer   User        @relation("InterviewerUser", fields: [interviewerId], references: [id], onDelete: Restrict)
+
+  @@unique([interviewId, interviewerId])
+  @@index([interviewId])
+  @@index([interviewerId])
+}
+
+model InterviewScorecard {
+  id             String                  @id @default(uuid())
+  interviewId    String
+  authorId       String
+  recommendation ScorecardRecommendation
+  overallRating  Decimal                 @db.Decimal(3, 2) // e.g. 4.25
+  criteriaScores Json                    // e.g. { technical: 4, communication: 5, problemSolving: 4 }
+  summaryNotes   String                  @db.Text
+  isLocked       Boolean                 @default(true)
+  submittedAt    DateTime                @default(now())
+
+  interview      Interview               @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+  author         User                    @relation("ScorecardAuthor", fields: [authorId], references: [id], onDelete: Restrict)
+
+  @@unique([interviewId, authorId])
+  @@index([interviewId])
+  @@index([authorId])
+}
+
+// ==========================================
+// OFFERS & ONBOARDING
+// ==========================================
+
+model JobOffer {
+  id               String      @id @default(uuid())
+  applicationId    String      @unique
+  approvedById     String?
+  status           OfferStatus @default(DRAFT)
+  baseSalary       Decimal     @db.Decimal(12, 2)
+  bonusAmount      Decimal?    @db.Decimal(12, 2)
+  currency         String      @default("USD")
+  joiningDate      DateTime
+  expiresAt        DateTime
+  termsAndConditions String    @db.Text
+  signedName       String?
+  signedAt         DateTime?
+  signedIpAddress  String?
+  declineReason    String?
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+
+  application      Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  approvedBy       User?       @relation("OfferApprover", fields: [approvedById], references: [id], onDelete: Restrict)
+
+  @@index([applicationId])
+  @@index([status])
+  @@index([expiresAt])
+}
+
+model OnboardingWorkflow {
+  id            String           @id @default(uuid())
+  applicationId String           @unique
+  startDate     DateTime?
+  completedAt   DateTime?
+  isCompleted   Boolean          @default(false)
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  application   Application      @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  tasks         OnboardingTask[]
+
+  @@index([applicationId])
+  @@index([isCompleted])
+}
+
+model OnboardingTask {
+  id             String                   @id @default(uuid())
+  workflowId     String
+  title          String                   // e.g. "Upload Identity Proof", "Emergency Contact"
+  description    String?
+  isMandatory    Boolean                  @default(true)
+  status         OnboardingTaskStatus     @default(PENDING)
+  rejectionReason String?
+  verifiedAt     DateTime?
+  createdAt      DateTime                 @default(now())
+  updatedAt      DateTime                 @updatedAt
+
+  workflow       OnboardingWorkflow       @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  submissions    OnboardingTaskSubmission[]
+
+  @@index([workflowId])
+  @@index([status])
+}
+
+model OnboardingTaskSubmission {
+  id             String         @id @default(uuid())
+  taskId         String
+  originalName   String?
+  storedFileName String?
+  storagePath    String?
+  textContent    String?        @db.Text
+  submittedAt    DateTime       @default(now())
+
+  task           OnboardingTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([taskId])
+}
+
+// ==========================================
+// SYSTEM AUDIT & NOTIFICATION LOGS
+// ==========================================
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  userId     String?
+  action     String   // e.g., "USER_LOGIN", "STAGE_CHANGE", "OFFER_CREATE"
+  resource   String   // e.g., "Application", "JobOffer"
+  resourceId String?
+  payload    Json?
+  ipAddress  String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([resource, resourceId])
+  @@index([createdAt])
+}
+
+model EmailLog {
+  id           String   @id @default(uuid())
+  recipient    String
+  subject      String
+  templateName String
+  status       String   // "SENT", "FAILED"
+  errorMessage String?
+  sentAt       DateTime @default(now())
+
+  @@index([recipient])
+  @@index([status])
+  @@index([sentAt])
+}
+```
+
+---
+
+## 3. Data Integrity & Indexing Strategy
+
+1. **Foreign Key Guarantees:** Relational constraints prevent orphan records. For example, deleting a candidate user is prevented (`onDelete: Restrict`) if active job applications exist, enforcing audit history retention.
+2. **Compound Unique Constraints:**
+   * `@@unique([candidateId, jobId])` on `Application` enforces that a candidate cannot spam multiple active submissions for the identical job requisition.
+   * `@@unique([interviewId, authorId])` on `InterviewScorecard` ensures each assigned interviewer can submit exactly one locked scorecard per round.
+3. **Optimized B-Tree Indexing:**
+   * High-frequency lookups (`email`, `status`, `stage`, `jobId`, `candidateId`) are indexed with B-Tree indices to keep queries well below the 200ms p95 SLA.
+4. **Soft Delete (`deletedAt`) Implementation:**
+   * `User`, `Job`, and `Application` entities incorporate nullable `deletedAt` timestamps. Soft deletion filters are enforced via Prisma middleware (`prisma.$use`) to preserve historical audit integrity while hiding archived entities from active production views.

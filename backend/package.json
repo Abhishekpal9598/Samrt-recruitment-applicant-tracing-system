@@ -1,0 +1,30 @@
+{
+  "name": "smart-recruitment-ats-backend",
+  "version": "1.0.0",
+  "description": "Smart Recruitment & Applicant Tracking System (ATS) - Enterprise Express Backend & Prisma Architecture",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "node ./node_modules/vitest/vitest.mjs run",
+    "lint": "node ./node_modules/eslint/bin/eslint.js src tests",
+    "prisma:generate": "node ./node_modules/prisma/build/index.js generate",
+    "prisma:migrate": "node ./node_modules/prisma/build/index.js migrate dev",
+    "prisma:seed": "node prisma/seed.js"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.3.1",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "helmet": "^8.0.0",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "eslint": "^9.18.0",
+    "prisma": "^6.3.1",
+    "supertest": "^7.0.0",
+    "vitest": "^2.1.9"
+  }
+}
